@@ -64,7 +64,7 @@ def get_accounts_for_environment(inventory, environment):
         accounts = [account for account in inventory if (
                 account['environment'] == environment and
                 account['team'] not in special_accounts and
-                account['adminEmail'] != 'awsservices@magellanhealth.com'
+                account['adminEmail'] != 'bmahmud@yahoo.com'
         )]
  
     if len(sys.argv) == 1:
@@ -91,7 +91,7 @@ def create_inventory_file(inventory):
  
 
 def get_inventory_from_files():
-    file_dir = '/Users/lichtleb/Documents/projects/awsaccountmgr/ansible/host_vars'
+    file_dir = '/Users/bmahmud/Documents/projects/awsaccountmgr/ansible/host_vars'
  
     inventory = []
     files = os.listdir(file_dir)
@@ -168,7 +168,7 @@ def apply_team_filter(inventory, teams):
         teams = [account for account in inventory if (
                  account['team'] in teams or
                  account['team'] in ['awsdemo', 'awssandbox', 'logging', 'custodian'] or
-                 account['adminEmail'] == 'awsservices@magellanhealth.com')]
+                 account['adminEmail'] == 'bmahmud@yahoo.com')]
         print('Running for teams: %s' % teams)
  
         return teams
@@ -206,8 +206,8 @@ def get_github_token():
  
 # Set up pull request api call for github api
 def get_url():
-    author = 'magellan-health'
-    repo = 'awsaccountmgr'
+    author = 'bmahmud'
+    repo = 'awspipelinerepo'
    
     sha = os.environ['CODEBUILD_RESOLVED_SOURCE_VERSION']
  

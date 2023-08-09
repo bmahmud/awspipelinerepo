@@ -20,8 +20,8 @@ def get_github_token():
  
 # Set up pull request api call for github api
 def get_url():
-    author = 'magellan-health'
-    repo = 'awsaccountmgr'
+    author = 'bmahmud'
+    repo = 'awspipelinerepo'
    
     sha = os.environ['CODEBUILD_RESOLVED_SOURCE_VERSION']
  
