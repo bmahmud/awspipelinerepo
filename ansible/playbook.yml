@@ -1,0 +1,63 @@
+- name: AWS Account Provisioning
+  hosts: all
+  connection: local
+  gather_facts: no
+ 
+  pre_tasks:
+  - name: Assume Role
+    include_role:
+      name: assume_role
+      tasks_from: main
+      apply:
+        tags:
+          - always
+    tags:
+      - always
+     
+  - name: Common
+    include_role:
+      name: common
+      tasks_from: main
+      apply:
+        tags:
+          - always
+    tags:
+      - always
+ 
+  - name: CF SNS Topic
+    include_role:
+      name: sns
+      tasks_from: cloudformation
+      apply:
+        tags:
+          - always
+    tags:
+      - always
+ 
+  roles:
+    - { role: iam, tags: ["iam"] }
+    - { role: iam2, tags: ["iam2"]}
+    - { role: kms, tags: ["kms"] }
+    - { role: assume_role, tags: ['assume_role'], vars: {message: "first"} }
+    - { role: cloudtrail, tags: ["cloudtrail"] }
+    - { role: shield, tags: ["shield"] }
+    - { role: events, tags: ["events"] }
+    - { role: s3, tags: ["s3"] }
+    - { role: config, tags: ["config"] }
+    - { role: ssm, tags: ["ssm"] }
+    - { role: ec2, tags: ["ec2"] }
+    - { role: lambda, tags: ["lambda"] }
+    - { role: lambda2, tags: ['lambda2'] }
+    - { role: assume_role, tags: ['assume_role'], vars: {message: "second"}  }
+    - { role: waf, tags: ["waf"] }
+    - { role: rds, tags: ["rds"] }
+    - { role: securityhub, tags: ["securityhub"] }
+    - { role: tgw, tags: ["tgw"] }
+    - { role: backup, tags: ["backup"] }
+    - { role: iam_with_dependencies, tags: ["iam_with_dependencies"] }
+    - { role: oneoff, tags: ["oneoff"] }
+    - { role: ami, tags: ["ami"] }
+    - { role: route53, tags: ["route53"] }
+    - { role: awsconfig, tags: ['awsconfig'] }
+    - { role: none, tags: ['none'] }
+ 

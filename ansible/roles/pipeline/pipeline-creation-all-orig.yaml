@@ -1,0 +1,695 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: This stack creates codepipeline and codebuild resources to execute aws account provisioning tasks
+Parameters:
+  CodeCommitRepo:
+    Type: String
+    Description: Git repository for pipeline to monitor
+    Default: awsaccountmgr
+  CodeCommitBranch:
+    Type: String
+    Description: Git branch for pipeline to monitor
+    Default: master
+  ExternalId:
+    Type: String
+    Description: Used for role assumption
+    Default: 'z4D4zkunSMceMjebrT4PgP64EMc3eV5gKsMNMt0YsJx2eRkni8KZGWvX8Q1P'
+    NoEcho: true
+  MasterAccount:
+    Type: String
+    Description: Account number for Master AWS Account
+    Default: '070124499031'
+  MasterRole:
+    Type: String
+    Description: Name of the master role
+    Default: 'AWSAccountManagerRole'
+  ApprovalEmail:
+    Type: String
+    Description: Email address to send approval requests
+    Default: 'jedicouncil@magellanhealth.com'
+  GitHubOwner:
+    Type: String
+    Description: GitHub repository owner
+    Default: magellan-health
+  GitHubToken:
+    Type: 'AWS::SSM::Parameter::Value<String>'
+    Description: GitHub repository OAuth token
+    Default: GitHubToken
+  S3Bucket:
+    Type: String
+    Description: Location of S3 bucket where artifacts will be stored
+    Default: prod-shared-mh-artifacts
+Resources:
+  SNSApprovalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        -
+          Endpoint:
+            Ref: ApprovalEmail
+          Protocol: email
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codepipeline.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: codepipeline-awsaccountmgr
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - codepipeline:*
+            - codecommit:*
+            - codebuild:*
+            - s3:*
+            - lambda:*
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - sns:Publish
+            Resource: '*'
+            Effect: Allow
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CodeBuildAccountMgr
+      ManagedPolicyArns:
+        - !Sub arn:aws:iam::${AWS::AccountId}:policy/MHStandardKMSPolicy
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: '/'
+      Policies:
+      - PolicyName: AllowDescribeStacks
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - cloudformation:DescribeStacks
+            - cloudformation:GetTemplateSummary
+            - cloudformation:CreateChangeSet
+            - cloudformation:DescribeChangeSet
+            - cloudformation:ExecuteChangeSet
+            - iam:GetRole
+            - lambda:UpdateFunctionCode
+            Resource: "*"
+            Effect: Allow
+      - PolicyName: MH-SecretsManager-For-Prisma-Login-Policy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - secretsmanager:GetSecretValue
+            - secretsmanager:ListSecretVersionIds
+            Resource: "*"
+            Effect: Allow
+      - PolicyName: MH-GetTransitGatewayInfo
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - ec2:DescribeTransitGateways
+            Resource: "*"
+            Effect: Allow
+      - PolicyName: codebuild-aws-account-creation-policy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - codepipeline:*
+            - codecommit:*
+            - codebuild:*
+            - sns:*
+            - logs:*
+            - ssm:GetParameter
+            - dynamodb:*
+            - ssm:ModifyDocumentPermission
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - s3:*
+            - kms:Decrypt
+            - kms:Encrypt
+            - kms:GetKeyPolicy
+            - kms:DescribeKey
+            - kms:ReEncrypt*
+            - kms:GenerateDataKey*
+            Effect: Allow
+            Resource: '*'
+          - Action:
+            - sts:AssumeRole
+            Effect: Allow
+            Resource:
+            - !Sub "arn:aws:iam::${MasterAccount}:role/${MasterRole}"
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+    - CodePipelineRole
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+      Name: awsaccountmgr-pipeline
+      RestartExecutionOnUpdate: 'True'
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+          - Name: SourceAction
+            ActionTypeId:
+              Category: Source
+              Owner: ThirdParty
+              Version: '1'
+              Provider: GitHub
+            RunOrder: 1
+            Configuration:
+              Owner: !Ref GitHubOwner
+              Repo: !Ref CodeCommitRepo
+              Branch: !Ref CodeCommitBranch
+              OAuthToken: !Ref GitHubToken
+            OutputArtifacts:
+            - Name: AnsibleSrc
+        - Name: BuildDev
+          Actions:
+          - Name: BuildAction
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Dev
+            RunOrder: 1
+        - Name: BuildTest
+          Actions:
+          - Name: ApprovalTest
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Version: '1'
+              Provider: Manual
+            InputArtifacts: []
+            OutputArtifacts: []
+            Configuration:
+              NotificationArn: !Ref SNSApprovalTopic
+            RunOrder: 1
+          - Name: BuildAction
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Test
+            RunOrder: 2
+        - Name: ProdApproval
+          Actions:
+          - Name: ApprovalProd
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Version: '1'
+              Provider: Manual
+            InputArtifacts: []
+            OutputArtifacts: []
+            Configuration:
+              NotificationArn: !Ref SNSApprovalTopic
+            RunOrder: 1
+        - Name: BuildProd
+          Actions:
+          - Name: InformationHarvesterAction
+            ActionTypeId:
+              Category: Invoke
+              Owner: AWS
+              Version: '1'
+              Provider: Lambda
+            RunOrder: 1
+            Configuration:
+              FunctionName: !ImportValue SNDocumentationHarvesterLambdaFunctionName
+          - Name: ServiceNowApproval
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Version: '1'
+              Provider: Manual
+            InputArtifacts: []
+            OutputArtifacts: []
+            Configuration:
+              NotificationArn: !ImportValue ServiceNowSNSTopicARN
+            RunOrder: 2
+          - Name: BuildEast
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Prod
+            RunOrder: 3
+          - Name: BuildWest
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Prod-West
+            RunOrder: 3
+          - Name: PostImplementationInformationHarvesterAction
+            ActionTypeId:
+              Category: Invoke
+              Owner: AWS
+              Version: '1'
+              Provider: Lambda
+            RunOrder: 4
+            Configuration:
+              FunctionName: !ImportValue SNPostImplementationDocumentationHarvesterLambdaFunctionName
+  SharedCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+    - CodePipelineRole
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+      Name: awsaccountmgr-pipeline-shared
+      RestartExecutionOnUpdate: 'True'
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+          - Name: SourceAction
+            ActionTypeId:
+              Category: Source
+              Owner: ThirdParty
+              Version: '1'
+              Provider: GitHub
+            RunOrder: 1
+            Configuration:
+              Owner: !Ref GitHubOwner
+              Repo: !Ref CodeCommitRepo
+              Branch: !Ref CodeCommitBranch
+              OAuthToken: !Ref GitHubToken
+            OutputArtifacts:
+            - Name: AnsibleSrc
+        - Name: BuildSharedProd
+          Actions:
+          - Name: BuildAction
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-SharedProd
+            RunOrder: 1
+  MiscCodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+    - CodePipelineRole
+    Properties:
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3Bucket
+      Name: awsaccountmgr-pipeline-misc-accounts
+      RestartExecutionOnUpdate: 'True'
+      RoleArn: !GetAtt CodePipelineRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+          - Name: SourceAction
+            ActionTypeId:
+              Category: Source
+              Owner: ThirdParty
+              Version: '1'
+              Provider: GitHub
+            RunOrder: 1
+            Configuration:
+              Owner: !Ref GitHubOwner
+              Repo: !Ref CodeCommitRepo
+              Branch: !Ref CodeCommitBranch
+              OAuthToken: !Ref GitHubToken
+            OutputArtifacts:
+            - Name: AnsibleSrc
+        - Name: BuildActions
+          Actions:
+          - Name: BuildLogging
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Logging
+            RunOrder: 1
+          - Name: BuildCustodian
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Custodian
+            RunOrder: 1
+          - Name: BuildSandbox
+            InputArtifacts:
+            - Name: AnsibleSrc
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Version: '1'
+              Provider: CodeBuild
+            Configuration:
+              ProjectName: AWSAccountMgr-Sandbox
+            RunOrder: 1
+  CodeBuildDev:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Dev
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+              commands:
+                - yum -y install zip unzip
+                - which python
+                - which python3 | echo 'no python3'
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runDev.sh
+      TimeoutInMinutes: '60'
+  CodeBuildTest:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Test
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runTest.sh
+      TimeoutInMinutes: '60'
+  CodeBuilProd:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Prod
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runProd.sh
+      TimeoutInMinutes: '60'
+  CodeBuildProdWest:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Prod-West
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - echo 'Hello, World'
+      TimeoutInMinutes: '60'
+  CodeBuildShared:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-SharedProd
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - which python
+                - which python3
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runSharedProd.sh
+      TimeoutInMinutes: '60'
+  CodeBuildLogging:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Logging
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runLogging.sh
+      TimeoutInMinutes: '60'
+  CodeBuildCustodian:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Custodian
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runCustodian.sh
+      TimeoutInMinutes: '60'
+  CodeBuildSandbox:
+    Type: AWS::CodeBuild::Project
+    DependsOn: CodeBuildRole
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Name: AWSAccountMgr-Sandbox
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Tags:
+        - Key: StackName
+          Value: !Ref AWS::StackName
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        Type: LINUX_CONTAINER
+        EnvironmentVariables:
+          - Name: ROLE_NAME
+            Value: !Ref MasterRole
+          - Name: ACCOUNT_ID
+            Value: !Ref MasterAccount
+          - Name: EXTERNAL_ID
+            Value: !Ref ExternalId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |-
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - bash -x ./ansible/standard_prebuild_commands.sh
+            build:
+              commands:
+                - cd ./ansible && bash -x ./runSandbox.sh
+      TimeoutInMinutes: '60'

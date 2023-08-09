@@ -1,0 +1,33 @@
+Resources:
+  BMAWSAccounts:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AttributeDefinitions:
+        -
+          AttributeName: "accountId"
+          AttributeType: "S"
+        -
+          AttributeName: "team"
+          AttributeType: "S"
+      KeySchema:
+        -
+          AttributeName: "accountId"
+          KeyType: "HASH"
+        -
+          AttributeName: "team"
+          KeyType: "RANGE"
+      ProvisionedThroughput:
+        ReadCapacityUnits: "5"
+        WriteCapacityUnits: "5"
+      StreamSpecification:
+        StreamViewType: KEYS_ONLY
+      TableName: "BMAWSAccounts"
+ 
+Outputs:
+  BMAWSAccountsStream:
+    Description: ARN for AWSAccounts DynamoDB Stream
+    Value: !GetAtt BMAWSAccounts.StreamArn
+    Export:
+      Name: BMAWSAccountsStreamArn
