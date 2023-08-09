@@ -34,14 +34,14 @@ Parameters:
     Type: String
     Description: GitHub repository owner
     Default: bmahmud
-  # GitHubToken:
-    # Type: 'AWS::SSM::Parameter::Value<String>'
-    # Description: GitHub repository OAuth token
-    # Default: GitHubToken
   GitHubToken:
-    Type: String
+    Type: 'AWS::SSM::Parameter::Value<String>'
     Description: GitHub repository OAuth token
-    Default: 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
+    Default: GitHubToken
+  # GitHubToken:
+  #   Type: String
+  #   Description: GitHub repository OAuth token
+  #   Default: 
   S3Bucket:
     Type: String
     Description: Location of S3 bucket where artifacts will be stored
