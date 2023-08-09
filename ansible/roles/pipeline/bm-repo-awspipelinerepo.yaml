@@ -41,7 +41,7 @@ Parameters:
   GitHubToken:
     Type: String
     Description: GitHub repository OAuth token
-    Default: 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
+    Default: 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
   S3Bucket:
     Type: String
     Description: Location of S3 bucket where artifacts will be stored
